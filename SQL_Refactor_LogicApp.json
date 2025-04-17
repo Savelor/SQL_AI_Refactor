@@ -1,0 +1,549 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_OpenAI_SQLAdv_TC2dev_33plus_name": {
+            "defaultValue": "OpenAI-SQLAdv_TC2dev_33plus",
+            "type": "String"
+        },
+        "connections_sql_5_externalid": {
+            "defaultValue": "/subscriptions/6396cb63-ec4e-4cc9-9277-d727a66bb9f6/resourceGroups/OPENAIP/providers/Microsoft.Web/connections/sql-5",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_OpenAI_SQLAdv_TC2dev_33plus_name')]",
+            "location": "westeurope",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Recurrence": {
+                            "recurrence": {
+                                "frequency": "Week",
+                                "interval": 1,
+                                "schedule": {
+                                    "hours": [
+                                        "9"
+                                    ],
+                                    "weekDays": [
+                                        "Sunday"
+                                    ]
+                                }
+                            },
+                            "evaluatedRecurrence": {
+                                "frequency": "Week",
+                                "interval": 1,
+                                "schedule": {
+                                    "hours": [
+                                        "9"
+                                    ],
+                                    "weekDays": [
+                                        "Sunday"
+                                    ]
+                                }
+                            },
+                            "type": "Recurrence"
+                        }
+                    },
+                    "actions": {
+                        "For_eachSQLResult": {
+                            "foreach": "@body('Extract_SQL_objects')?['resultsets']?['Table1']",
+                            "actions": {
+                                "SetVariableQuestion": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "Question",
+                                        "value": "Considering the rules specified here: Please assess the SQL code :@{items('For_eachSQLResult')} \nand put your suggestions here:\n\n"
+                                    }
+                                },
+                                "HTTP_request_to_Azure_OpenAI": {
+                                    "runAfter": {
+                                        "SetVariableQuestion": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "https://aisavelor.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-08-01-preview",
+                                        "method": "POST",
+                                        "headers": {
+                                            "api-key": "@variables('Api-Key')"
+                                        },
+                                        "body": {
+                                            "max_tokens": 3000,
+                                            "temperature": 0.6,
+                                            "messages": [
+                                                {
+                                                    "content": "You are a SQL Server developer. Analyze the SQL batch that you have in input, and report an assessment with observations related to the best practice rules that are given to you.",
+                                                    "role": "user"
+                                                },
+                                                {
+                                                    "content": "@{variables('Question')}",
+                                                    "role": "user"
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                                "Parse_JSON": {
+                                    "runAfter": {
+                                        "HTTP_request_to_Azure_OpenAI": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ParseJson",
+                                    "inputs": {
+                                        "content": "@body('HTTP_request_to_Azure_OpenAI')",
+                                        "schema": {
+                                            "properties": {
+                                                "choices": {
+                                                    "items": {
+                                                        "properties": {
+                                                            "message": {
+                                                                "properties": {
+                                                                    "content": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    },
+                                                    "type": "array"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    }
+                                },
+                                "Compose_CheckOpenAIContent": {
+                                    "runAfter": {
+                                        "Parse_JSON": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@body('Parse_JSON')?['choices'][0]?['message']?['content']"
+                                },
+                                "Update_row_(V2)": {
+                                    "runAfter": {
+                                        "Compose_CheckOpenAIContent": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                            }
+                                        },
+                                        "method": "patch",
+                                        "body": {
+                                            "AI_out1": "@{outputs('Compose_CheckOpenAIContent')}"
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[dbo].[codeplex]'))}/items/@{items('For_eachSQLResult')?['Id']}"
+                                    }
+                                },
+                                "HTTP_request_to_Azure_OpenAI_2": {
+                                    "runAfter": {
+                                        "SetVariableQuestion2": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "https://aisavelor.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-08-01-preview",
+                                        "method": "POST",
+                                        "headers": {
+                                            "api-key": "@variables('Api-Key')"
+                                        },
+                                        "body": {
+                                            "max_tokens": 3000,
+                                            "temperature": 0.6,
+                                            "messages": [
+                                                {
+                                                    "content": "You are a SQL Server developer. Analyze and Rewrite with observations each T-SQL batch that you have in input, applying the best practice rules that are given to you.",
+                                                    "role": "user"
+                                                },
+                                                {
+                                                    "content": "@{variables('Question2')}",
+                                                    "role": "user"
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                                "Parse_JSON_2": {
+                                    "runAfter": {
+                                        "HTTP_request_to_Azure_OpenAI_2": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ParseJson",
+                                    "inputs": {
+                                        "content": "@body('HTTP_request_to_Azure_OpenAI_2')",
+                                        "schema": {
+                                            "properties": {
+                                                "choices": {
+                                                    "items": {
+                                                        "properties": {
+                                                            "message": {
+                                                                "properties": {
+                                                                    "content": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    },
+                                                    "type": "array"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    }
+                                },
+                                "Compose_CheckOpenAIContent_2": {
+                                    "runAfter": {
+                                        "Parse_JSON_2": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@body('Parse_JSON_2')?['choices'][0]?['message']?['content']"
+                                },
+                                "Update_row_(V2)_2": {
+                                    "runAfter": {
+                                        "Compose_CheckOpenAIContent_2": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                            }
+                                        },
+                                        "method": "patch",
+                                        "body": {
+                                            "AI_out2": "@{outputs('Compose_CheckOpenAIContent_2')}"
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[dbo].[codeplex]'))}/items/@{items('For_eachSQLResult')?['Id']}"
+                                    }
+                                },
+                                "SetVariableQuestion2": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "Question2",
+                                        "value": "Read and analyze all the provided T-SQL batch and apply the following rules: The rules 1, 2, 3 and 4 must be applied before any other rule. \n\n1. Analyze provided code and identify code fragments INSERT.. INTO with SELECT statements containing an ORDER BY clause at the end of the SELECT clause. In this case remove the ORDER BY clause from the outer query. \nHowever, if the SELECT statement contains an inner subquery using IN, NOT IN, EXISTS, or NOT EXISTS, and that subquery includes an ORDER BY clause, then the ORDER BY inside the subquery must remain untouched and NOT removed.\n\n1.a Given a T-SQL script with INSERT INTO ... SELECT statements, if there's an ORDER BY clause at the outer query level, remove it. If the SELECT statement contains a subquery using IN, NOT IN, EXISTS, or NOT EXISTS, leave the ORDER BY inside that subquery as is, even if the outer query has an ORDER BY.\n\n2. If a table variable is Inserted multiple times, don't remove that and don't replace with CTE. Leave it into the code.\n\n3. Analize the provided code carefully to identify UNUSED elements such as parameters or variables that are declared in DECLARE statement and after such declaration they don't appear in the code anymore. Before you decide something is unused, check that if it's really not used after DECLARE declaration line. Avoid prematurely calling something unused without a full pass through the entire flow for two times. Remove all unused parameters and variables that you identified from the code.\n\n4. Analyze all the code and logical flow to identify UNUSEFUL elements. In a scalar function, unuseful elements are those variables, parameters, temporary tables or SQL statements that don't contribute to the final output of the function. The final value is what appears just after the keyword 'RETURN'.\nIn a scalar function determine which variables, tables and statements do not contribute to the RETURN value and remove those elements from the code. Additionally, explain the reason  behind the changes.\n\n5. In a stored procedure the final output is the last SELECT. Determine which elements do not contribute to the final SELECT statement and remove them from the body of the procedure.\nIn a stored procedure evaluate which elements do not impact the UPDATE, DELETE or INSERT statements. If an element (parameter, variable, table or statement) does not impact any UPDATE, DELETE or INSERT, delete it.\n\nWithin the body of a function or stored procedure, if a SELECT statement does not impact the final result simply remove it from the body. Do not apply to that specific statement any other rule.\n\n6. If the provided code is a stored procedure or function, identify the input parameters that are declared but not used within the body of the procedure or function. Remove these identified parameters from the body and from parameters list of stored procedure or function.\n\n7. When you find a query such as \"SELECT * FROM Table\", read all the query or batch, and identify which columns FROM that Table are really used in the batch to build the output result or to modify some tables. Take notes of such used columns and then replace the \"*\" in the SELECT statement with only the columns you found as used.\nIf reading the code below the \"SELECT *\" statement it is not possible to understand which columns are really used, don't make any assumption and replace the * with all columns names of the table, you have the list of columns of a table in form of \"table;column;data_type\" here: @{variables('DataTypesString')}\n\n8. Use explicit JOIN syntax with ON keyword and specifying the join columns, instead of the older implicit JOIN using only commas and WHERE condition. Explicit joins improve readability and maintainability.\n\n9. When an ORDER BY is written using the column number (for example: ORDER BY 1, 3, 5) rewrite the ORDER BY clause with column names to avoid any confusion.\n\n10. In a WHERE comparison clause, if there are calculations or transformations on a column, leave the column alone on left side and move the equivalent calculation on the right. On the left side of the comparison there should appear only the column. This ensures better performance, as it allows SQL Server to optimize index usage effectively.\nExample: avoid this “WHERE price * 12 = 5500“ replace with this “WHERE price = 5500/12”\n\n11. When you find ABS function in a WHERE clause, replace that and refactor writing the query in another way, with equivalent conditions: Example: “WHERE ABS(level) < 4” must be refactored as “WHERE level < 4 AND level > -4”\n\n12. When you find WHERE conditions such as: WHERE column LIKE '%text’ or LIKE '%text%', act as follows:\na) If the string to search has ‘%’ at the beginning of the string to search, use the RIGHT function instead. For example replace: “WHERE AddressLine LIKE '%way'” with:  “WHERE RIGHT(AddressLine,3) = 'way'”\nb) If the string to search is between two wildcards‘%’, use the CHARINDEX function instead. For example replace: “WHERE AddressLine LIKE '%way%'” with:  “WHERE CHARINDEX('way', AddressLine, 0) > 0”\nc) If the string to search has wildcard ‘%’ at the end of the string, don't modify this condition. For example: “WHERE AddressLine LIKE 'way%'”  don't modify that. Consider also that the clause LIKE '%bike' is NOT redundant with: LIKE 'bike%'.\nd) If the WHERE condition contains both conditions: \"column LIKE '%way'\" AND \"column LIKE 'way%'\" then rewrite as \"column = 'way'\"\n\n13. When you find expression such as: WHERE column1 IN (SELECT column2 FROM TableX ..), then eliminate the parenthesis and INNER JOIN the column1 with TableX ON column1 = column2 and keep the rest of the subquery.\nFor example: “..FROM Sales.SalesOrderHeader WHERE CustomerID IN (SELECT CustomerID FROM Sales.Customer)”\nbecomes:  “FROM Sales.SalesOrderHeader soh INNER JOIN Sales.Customer c ON soh.CustomerID = c.CustomerID”\n\n14. When you find WHERE expression containing functions on column such as :YEAR(column) = x, or MONTH(column) = x, or DAY(column) = x, or HOUR(column) = x, don't use any function on the column. Rewrite the WHERE expression leaving the column alone on left side of the comparison and rewrite an equivalent condition on x modifying the rigth side of the comparison.\n\n15. When you find WHERE expression containing functions on column such as: CEILING(column) = x, or FLOOR(column) = x, don't use any function on the column. Rewrite the WHERE expression leaving the column alone on left side of the comparison and rewrite an equivalent condition on x modifying the rigth side of the comparison.\nExample: \"WHERE CEILING(UnitPrice) = 714\" must be rewrittes as \"WHERE  UnitPrice > 713 AND UnitPrice <= 714\"\nExample: \"WHERE FLOOR(UnitPrice) = 714\" must be rewritten as \"WHERE  UnitPrice >= 714 AND UnitPrice < 715\" \n\n16. When you find WHERE expression containing functions on column such as :DATEDIFF(column), DATEADD(column) and DATEPART(column) having the column as parameter, rewrite the WHERE expression leaving the column alone on left side of the comparison and rewrite an equivalent condition modifying the rigth side of the comparison as in the following examples:\nExample1: \"WHERE DATEDIFF(DAY, ModifiedDate, GETDATE()) < 21\" must be rewrittes as \"WHERE ModifiedDate >= DATEADD(DAY, -21, GETDATE())\".\nExample2: \"WHERE DATEPART(YEAR, ModifiedDate) = 2013\" must be rewritten as \"WHERE ModifiedDate >= '2013-01-01’ AND ModifiedDate < '2014-01-01'\".\nExample3: \"WHERE DATEADD(DAY, 30, ModifiedDate) >= '2024-01-01'\" must be rewritten as \"WHERE ModifiedDate >= DATEADD(DAY, -30, '2024-01-01')\"\n\n17. Don't write subqueries or derived tables such as INNER JOIN (SELECT DISTINCT ..). Please join the main table and tables inside the prenthesis without wrapping them in parenthesis or creating subqueries. \n\n18. Analize the provided code and identify dynamic SQL executions such as:  \"EXEC @query\" or \"EXEC sp_executesql @query\" without parameters. Identify only the cases with the command string @query left unvalidated AND it is built by concatenating multiple strings or variables. In this cases rewrite the code using one of the following two alternative options:\n1. keep EXEC @query, and add to to the code additional check validations on sql string. Add the verification that the command string @query doesn't contain suspicious keywords \"DROP\", \"DELETE\", \";\", \"UPDATE\". In addition report a warning comment in the modified code.\n2. Replace EXEC with EXEC sp_executesql @query, passing parameters instead concatenating paramenters in the @query command string.\n3. If the argument of EXEC function is a fixed query not built concatenating any variable, just remove exec and execute the argument statement.\n\n19. Analyze the provided code and identify unused and unuseful elements. Distinguish between Unused and Unuseful:\nUnused are those variables and tables which are declared but NOT used in the code after the declaration.\nUnuseful are those elements (variable, table, parameter, or statement) that do not logically affect the final result.\nRewrite the query to ensure that all elements are used contribute to the intended output. To do that remove unused and unuseful elements from the original code, while maintaining its original purpose and functionality. \n\n\n20. You have information about all tables, the columns for each single table, and the data type of each column of a table. You have his information is expressed in the form of \"table;column;data_type\" here: @{variables('DataTypesString')}\nIn the original code, identify all WHERE conditions that compare a column with a variable using operators such as =, >, >=, <, or <=. Determine the column’s data type based on the provided reference format (\"table;column;data_type\") and identify the variable’s data type by analyzing the code. If the column and variable have different data types, either rewrite the WHERE condition applying the CONVERT() function to the variable to match the column’s data type or declare the variable with the same data type as the column. The value compared to the column must always have exactly the same data type as the column itself.\n\n21. If in the WHERE clause the YEAR function is applied to a column, use range comparison  according to the following examples:\nYEAR(OrderDate) = 2022 → OrderDate >= '2022-01-01' AND OrderDate < '2023-01-01'.\n\n22. If in the WHERE clause the function LEFT is applied to a column, rewrite the WHERE clause using LIKE as in this example:\nLEFT(AddressLine1,3) = 'way' → WHERE AddressLine1 Like 'way%'.\n\n21. If in the WHERE clause the function DATEPART() is applied to a column, with YEAR as first parameter, replace the clause using a range comparison as in this example:\nWHERE DATEPART(YEAR, ModifiedDate) = 2013 → WHERE ModifiedDate >= '2013-01-01’ AND ModifiedDate < '2014-01-01'.\n\n23. Functions like MONTH(), DAY() cannot be rewritten as SARGable. So when you find them don't modify them.\n\n24. Identify possible SQL cursor and determine if it can be replaced by a Common Table Expression (CTE) or a set-based query. Follow these steps:\na) Examine the cursor logic: Identify if the cursor is used for row-by-row processing, data aggregation, or iterative updates.\nb) Check for independent row operations: If each row is processed independently (without dependencies on previous or next rows), consider replacing the cursor with a set-based query or a CTE.\nc) Detect aggregation or cumulative calculations:\nIf the cursor is used to calculate cumulative totals, running balances, or ranks, replace it with a CTE or a window function (ROW_NUMBER(), SUM() OVER, RANK()).\nd) Review the cursor's output or final result:\nIf the output can be produced with a single SELECT, UPDATE, or DELETE query, convert the cursor logic into a set-based query.\n\nWrite an optimized query or CTE:\nOnce identified, transform the cursor into a more efficient query. Provide comments to explain how the new query replaces the cursor functionality.\n\n25. When in the code there's a temporary table, evaluate to replace it with a CTE returning the same dataset, according to the following rules.\nBefore replacing, verify that that temporary table impacts the output of the function or procedure where it is located. If the temporary table doesn't impact the final output remove it from the body.\nA CTE can replace a temporary table when all these conditions are matched:\na) If the data in temporary table is needed only for a single query (e.g., SELECT, INSERT, UPDATE, DELETE), a CTE is ideal as it exists only within the query scope.\nb) No Indexing Required: If you don't need to index the result or perform optimizations like partitioning, use a CTE.\nc) No Modifications: If you don’t need to modify the data in temporary table across multiple queries, CTEs are sufficient.\nd) If you don’t need the data in temporary table to persist beyond the current query, a CTE is better.\ne) For smaller datasets that don't require multiple accesses, CTEs are more efficient than temporary tables.\n\nA CTE cannot replace a temporary table when just one of the following conditions are matched:\nf) If you need to persist the result for use across multiple queries, use a temporary table.\ng) If you need to create indexes or optimize performance for large datasets, use a temporary table.\nh) If you need to perform multiple updates, deletes, or inserts on the data, a temporary table is required.\ni) Large or Complex Data: For large datasets or complex manipulations, a temporary table offers more control and efficiency.\nl) Multiple References: If the result needs to be used multiple times in different queries, a temporary table is necessary.\n\n26. If the provided code contains a temporary table or table variable having columns of data types: TEXT, NTEXT, or IMAGE, replace those columns with the modern equivalent data types:\nReplace TEXT with VARCHAR(MAX)\nReplace NTEXT with NVARCHAR(MAX)\nReplace IMAGE with VARBINARY(MAX)\nEnsure the new batch uses either a temporary table or a table variable with the updated data types.\n\n27. If the provided code ia a stored procedure or function, identify and list any parameters that are declared but not used within the procedure or function. Remove them from the body of stored procedure or function.\n\n28. If the provided code contains a WHERE condition with the SIGN() function applied to a column rewrite the query to avoid the function and make the condition SARGable as in this example.\nExample: \nWHERE SIGN(SalesOrderID) = 1  -> WHERE SalesOrderID > 0\nWHERE SIGN(SalesOrderID) = -1  -> WHERE SalesOrderID < 0\nWHERE SIGN(SalesOrderID) = 0  -> WHERE SalesOrderID = 0\n\n29. If the provided code contains a WHERE condition with the ISNULL() function applied to a column rewrite the query to avoid the function and make the condition SARGable as in this example.\nExample: \nWHERE ISNULL(Region, '') = 'East' -> WHERE Region = 'East' OR Region IS NULL\n\n\nPlease rewrite the original SQL code :@{items('For_eachSQLResult')}, according with all instructions above. After you have rewritten, read and analyze again one more time you result and try to apply again the rules.\nDo not write here the original code: put your new rewritten optimized code and your considerations here:"
+                                    }
+                                },
+                                "HTTP_request_to_Azure_OpenAI_3": {
+                                    "runAfter": {
+                                        "SetVariableQuestion2": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "https://aisavelor.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-08-01-preview",
+                                        "method": "POST",
+                                        "headers": {
+                                            "api-key": "@variables('Api-Key')"
+                                        },
+                                        "body": {
+                                            "max_tokens": 3000,
+                                            "temperature": 0.4,
+                                            "messages": [
+                                                {
+                                                    "content": "You are a SQL Server developer. Analyze and Rewrite with observations each T-SQL batch that you have in input, applying to the best practice rules that are given to you.",
+                                                    "role": "user"
+                                                },
+                                                {
+                                                    "content": "@{variables('Question2')}",
+                                                    "role": "user"
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                                "Parse_JSON_3": {
+                                    "runAfter": {
+                                        "HTTP_request_to_Azure_OpenAI_3": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ParseJson",
+                                    "inputs": {
+                                        "content": "@body('HTTP_request_to_Azure_OpenAI_3')",
+                                        "schema": {
+                                            "properties": {
+                                                "choices": {
+                                                    "items": {
+                                                        "properties": {
+                                                            "message": {
+                                                                "properties": {
+                                                                    "content": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    },
+                                                    "type": "array"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    }
+                                },
+                                "Compose_CheckOpenAIContent3": {
+                                    "runAfter": {
+                                        "Parse_JSON_3": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Compose",
+                                    "inputs": "@body('Parse_JSON_3')?['choices'][0]?['message']?['content']"
+                                },
+                                "Update_row_(V2)_2-copy": {
+                                    "runAfter": {
+                                        "Compose_CheckOpenAIContent3": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                            }
+                                        },
+                                        "method": "patch",
+                                        "body": {
+                                            "AI_out3": "@{outputs('Compose_CheckOpenAIContent3')}"
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[dbo].[codeplex]'))}/items/@{items('For_eachSQLResult')?['Id']}"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Extract_SQL_objects": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach",
+                            "runtimeConfiguration": {
+                                "concurrency": {
+                                    "repetitions": 1
+                                }
+                            }
+                        },
+                        "Open_AI_API_Key": {
+                            "runAfter": {
+                                "Extract_DBcode": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "Api-Key",
+                                        "type": "string",
+                                        "value": "d601113d574940538109ee59dde7527e"
+                                    }
+                                ]
+                            }
+                        },
+                        "Question": {
+                            "runAfter": {
+                                "Open_AI_API_Key": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "Question",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        },
+                        "Extract_SQL_objects": {
+                            "runAfter": {
+                                "Set_DataTypesString": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "query": "SELECT Id, sourcesql FROM codeplex ORDER BY Id"
+                                },
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                            }
+                        },
+                        "Question2": {
+                            "runAfter": {
+                                "Question": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "Question2",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        },
+                        "Extract_DBcode": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "query": "TRUNCATE TABLE codeplex; \nINSERT INTO [dbo].[codeplex]\nSELECT db_name(), SCHEMA_NAME(O.schema_id), O.name, O.type_desc, M.definition, null, null, null\nFROM sys.sql_modules M\nINNER JOIN sys.objects O \nON M.object_id = O.object_id\nWHERE o.type_desc <> 'SQL_SCALAR_FUNCTION'\norder by O.type_desc, SCHEMA_NAME(O.schema_id), O.name"
+                                },
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                            }
+                        },
+                        "Extract_Data_Types": {
+                            "runAfter": {
+                                "Question2": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "query": "SELECT \n    tab.name + ';' + col.name + ';' + Dtype.name AS Data_Type\nFROM sys.tables tab\nINNER JOIN sys.columns col ON tab.object_id = col.object_id\nINNER JOIN sys.types Dtype ON col.user_type_id = Dtype.user_type_id\nORDER BY  tab.name, col.column_id;"
+                                },
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                            }
+                        },
+                        "For_each_1": {
+                            "foreach": "@body('Extract_Data_Types')?['resultsets']?['Table1']",
+                            "actions": {
+                                "Append_to_array_variable": {
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "DataTypesList",
+                                        "value": "@items('For_each_1')"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_variable-DataTypesList": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "Initialize_variable-DataTypesList": {
+                            "runAfter": {
+                                "Extract_Data_Types": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "DataTypesList",
+                                        "type": "array"
+                                    }
+                                ]
+                            }
+                        },
+                        "Set_DataTypesString": {
+                            "runAfter": {
+                                "Initialize_DataTypesString": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "SetVariable",
+                            "inputs": {
+                                "name": "DataTypesString",
+                                "value": "@join(variables('DataTypesList'), ';')"
+                            }
+                        },
+                        "Initialize_DataTypesString": {
+                            "runAfter": {
+                                "For_each_1": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "DataTypesString",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "sql-1": {
+                                "id": "/subscriptions/6396cb63-ec4e-4cc9-9277-d727a66bb9f6/providers/Microsoft.Web/locations/westeurope/managedApis/sql",
+                                "connectionId": "[parameters('connections_sql_5_externalid')]",
+                                "connectionName": "sql-5"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
